@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="MedAgenda">
+<meta name="theme-color" content="#00B4A6">
+<link rel="manifest" id="manifest-link">
 <title>MedAgenda</title>
 <style>
   :root {
@@ -406,6 +409,50 @@
   .confirm-cancel { background: var(--gray-100); color: var(--gray-700); }
   .confirm-ok { background: var(--red); color: white; }
 
+  /* ── NOTIFICATION BANNER ── */
+  .notif-banner {
+    margin: 12px 16px 0; padding: 14px 16px;
+    border-radius: var(--radius-md);
+    display: flex; align-items: center; gap: 12px;
+    box-shadow: var(--shadow-sm);
+    animation: fadeIn 0.3s;
+  }
+  .notif-banner.warn { background: var(--amber-light); }
+  .notif-banner.info { background: var(--teal-light); }
+  .notif-banner.off { background: var(--red-light); }
+  .notif-banner-icon { font-size: 22px; flex-shrink: 0; }
+  .notif-banner-text { flex: 1; }
+  .notif-banner-title { font-size: 13px; font-weight: 700; color: var(--gray-900); }
+  .notif-banner-desc { font-size: 12px; color: var(--gray-500); margin-top: 1px; line-height: 1.4; }
+  .notif-banner-btn {
+    background: var(--gray-900); color: white; border: none;
+    border-radius: 16px; padding: 7px 14px; font-size: 12px; font-weight: 700;
+    cursor: pointer; white-space: nowrap; flex-shrink: 0; font-family: inherit;
+  }
+  .notif-banner-close {
+    width: 22px; height: 22px; border-radius: 50%; border: none;
+    background: rgba(0,0,0,0.06); cursor: pointer; font-size: 12px;
+    color: var(--gray-500); flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  }
+
+  /* Toggle switch (used in med form for reminders) */
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; margin-bottom: 16px; }
+  .toggle-row-label { font-size: 14px; font-weight: 600; color: var(--gray-900); }
+  .toggle-row-desc { font-size: 12px; color: var(--gray-500); margin-top: 2px; }
+  .switch { position: relative; width: 46px; height: 27px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-track {
+    position: absolute; inset: 0; background: var(--gray-300); border-radius: 27px;
+    cursor: pointer; transition: background 0.2s;
+  }
+  .switch-track::before {
+    content: ''; position: absolute; width: 23px; height: 23px; left: 2px; top: 2px;
+    background: white; border-radius: 50%; transition: transform 0.2s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  .switch input:checked + .switch-track { background: var(--teal); }
+  .switch input:checked + .switch-track::before { transform: translateX(19px); }
+
   /* Switcher for days */
   .day-nav { display: flex; align-items: center; gap: 10px; }
   .day-nav-btn { width: 28px; height: 28px; border-radius: 50%; background: var(--gray-100); border: none; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; color: var(--gray-700); transition: background 0.15s; }
@@ -439,6 +486,7 @@
         </div>
       </div>
     </div>
+    <div id="notif-banner-wrap"></div>
     <div class="scroll-area" id="today-scroll">
       <!-- Progress ring -->
       <div class="day-progress" id="day-progress-wrap">
@@ -605,6 +653,17 @@
       <textarea class="form-input" id="f-notes" rows="2" placeholder="Ex: Tomar com alimento, em jejum…" style="resize:none;line-height:1.5"></textarea>
     </div>
 
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-row-label">🔔 Lembrete antecipado</div>
+        <div class="toggle-row-desc">Notificar 1h e 10min antes de cada horário</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="f-reminder" checked>
+        <span class="switch-track"></span>
+      </label>
+    </div>
+
     <button class="form-btn" id="save-btn" onclick="saveMed()">Salvar remédio</button>
     <button class="form-btn danger" id="del-btn" style="margin-top:10px;display:none" onclick="deleteMedConfirm()">Excluir remédio</button>
   </div>
@@ -634,8 +693,204 @@
 
 <script>
 // ──────────────────────────────────────────────────────────────────────
-// STATE
+// PWA SETUP — manifest + service worker (necessário para notificações)
 // ──────────────────────────────────────────────────────────────────────
+const REMINDER_LEADS = [
+  { ms: 60 * 60 * 1000, label: '1 hora' },
+  { ms: 10 * 60 * 1000, label: '10 minutos' },
+];
+
+const MANIFEST = {
+  name: "MedAgenda",
+  short_name: "MedAgenda",
+  start_url: ".",
+  display: "standalone",
+  background_color: "#F9FAFB",
+  theme_color: "#00B4A6",
+  icons: [
+    { src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%2300B4A6'/%3E%3Ctext x='50' y='66' font-size='52' text-anchor='middle'%3E%F0%9F%92%8A%3C/text%3E%3C/svg%3E", sizes: "192x192", type: "image/svg+xml" }
+  ]
+};
+(function setManifest() {
+  const blob = new Blob([JSON.stringify(MANIFEST)], { type: 'application/json' });
+  document.getElementById('manifest-link').href = URL.createObjectURL(blob);
+})();
+
+const SW_CODE = `
+const NOTIF_TAG_PREFIX = 'medagenda-';
+self.addEventListener('install', e => self.skipWaiting());
+self.addEventListener('activate', e => self.clients.claim());
+
+self.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg || msg.type !== 'SCHEDULE_NOTIFS') return;
+  const { notifications } = msg;
+  // Limpa timers antigos
+  if (self._timers) self._timers.forEach(t => clearTimeout(t));
+  self._timers = [];
+  const now = Date.now();
+  notifications.forEach(n => {
+    const delay = n.fireAt - now;
+    if (delay <= 0 || delay > 2147000000) return; // setTimeout max ~24.8 dias
+    const t = setTimeout(() => {
+      self.registration.showNotification(n.title, {
+        body: n.body,
+        tag: NOTIF_TAG_PREFIX + n.id,
+        icon: 'data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 100 100\\'%3E%3Crect width=\\'100\\' height=\\'100\\' rx=\\'22\\' fill=\\'%2300B4A6\\'/%3E%3Ctext x=\\'50\\' y=\\'66\\' font-size=\\'52\\' text-anchor=\\'middle\\'%3E%F0%9F%92%8A%3C/text%3E%3C/svg%3E',
+        badge: 'data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' viewBox=\\'0 0 100 100\\'%3E%3Crect width=\\'100\\' height=\\'100\\' fill=\\'%2300B4A6\\'/%3E%3C/svg%3E',
+        vibrate: [200, 100, 200],
+        requireInteraction: true,
+        data: { medId: n.medId, time: n.time }
+      });
+    }, delay);
+    self._timers.push(t);
+  });
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window' }).then(clientList => {
+      if (clientList.length > 0) return clientList[0].focus();
+      return self.clients.openWindow('.');
+    })
+  );
+});
+`;
+
+let swRegistration = null;
+
+async function setupServiceWorker() {
+  if (!('serviceWorker' in navigator)) return null;
+  try {
+    const blob = new Blob([SW_CODE], { type: 'application/javascript' });
+    const swUrl = URL.createObjectURL(blob);
+    swRegistration = await navigator.serviceWorker.register(swUrl);
+    await navigator.serviceWorker.ready;
+    return swRegistration;
+  } catch (err) {
+    console.warn('Service worker não pôde ser registrado:', err);
+    return null;
+  }
+}
+
+function notifPermissionStatus() {
+  if (!('Notification' in window)) return 'unsupported';
+  return Notification.permission; // 'default' | 'granted' | 'denied'
+}
+
+async function requestNotifPermission() {
+  if (!('Notification' in window)) {
+    showToast('Notificações não são suportadas neste navegador');
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  renderNotifBanner();
+  if (perm === 'granted') {
+    showToast('Lembretes ativados ✓');
+    await setupServiceWorker();
+    scheduleAllReminders();
+  } else if (perm === 'denied') {
+    showToast('Permissão de notificação negada');
+  }
+}
+
+// Calcula horários de disparo (fireAt) para os próximos N dias, com base nos remédios cadastrados
+function buildUpcomingNotifications(daysAhead = 7) {
+  const notifs = [];
+  const now = Date.now();
+  for (let i = 0; i < daysAhead; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    meds.forEach(med => {
+      if (med.reminder === false) return; // lembrete desativado para este remédio
+      (med.times || []).forEach(t => {
+        const [h, m] = t.split(':').map(Number);
+        const schedDate = new Date(d);
+        schedDate.setHours(h, m, 0, 0);
+        REMINDER_LEADS.forEach(lead => {
+          const fireAt = schedDate.getTime() - lead.ms;
+          if (fireAt > now) {
+            notifs.push({
+              id: med.id + '-' + dateKey(schedDate) + '-' + t + '-' + lead.ms,
+              medId: med.id,
+              time: t,
+              fireAt,
+              title: `💊 ${med.name} em ${lead.label}`,
+              body: `${med.dose ? med.dose + ' · ' : ''}Próxima dose às ${t}. Prepare-se para administrar.`
+            });
+          }
+        });
+      });
+    });
+  }
+  return notifs;
+}
+
+async function scheduleAllReminders() {
+  if (notifPermissionStatus() !== 'granted') return;
+  if (!swRegistration) {
+    const reg = await navigator.serviceWorker.getRegistration();
+    swRegistration = reg || await setupServiceWorker();
+  }
+  if (!swRegistration || !swRegistration.active) {
+    // aguarda o SW ficar pronto
+    await navigator.serviceWorker.ready;
+    swRegistration = await navigator.serviceWorker.getRegistration();
+  }
+  const notifications = buildUpcomingNotifications(7);
+  const target = swRegistration?.active || navigator.serviceWorker.controller;
+  if (target) {
+    target.postMessage({ type: 'SCHEDULE_NOTIFS', notifications });
+  }
+  localStorage.setItem('medagenda_notifs_scheduled_at', String(Date.now()));
+}
+
+function renderNotifBanner() {
+  const wrap = document.getElementById('notif-banner-wrap');
+  if (!wrap) return;
+  const status = notifPermissionStatus();
+  const dismissed = sessionStorage.getItem('medagenda_banner_dismissed');
+
+  if (status === 'unsupported') {
+    wrap.innerHTML = '';
+    return;
+  }
+  if (status === 'granted') {
+    wrap.innerHTML = '';
+    return;
+  }
+  if (status === 'denied') {
+    wrap.innerHTML = `
+      <div class="notif-banner off">
+        <div class="notif-banner-icon">🔕</div>
+        <div class="notif-banner-text">
+          <div class="notif-banner-title">Notificações bloqueadas</div>
+          <div class="notif-banner-desc">Ative nas configurações do navegador para receber lembretes 1h e 10min antes de cada dose.</div>
+        </div>
+      </div>`;
+    return;
+  }
+  // default (ainda não perguntado)
+  if (dismissed) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `
+    <div class="notif-banner info">
+      <div class="notif-banner-icon">🔔</div>
+      <div class="notif-banner-text">
+        <div class="notif-banner-title">Ativar lembretes</div>
+        <div class="notif-banner-desc">Receba um aviso 1h e outro 10min antes de cada horário de remédio.</div>
+      </div>
+      <button class="notif-banner-btn" onclick="requestNotifPermission()">Ativar</button>
+      <button class="notif-banner-close" onclick="dismissNotifBanner()">✕</button>
+    </div>`;
+}
+
+function dismissNotifBanner() {
+  sessionStorage.setItem('medagenda_banner_dismissed', '1');
+  renderNotifBanner();
+}
+
+
 let meds = JSON.parse(localStorage.getItem('medagenda_meds') || '[]');
 let logs = JSON.parse(localStorage.getItem('medagenda_logs') || '[]');
 
@@ -713,7 +968,7 @@ function showScreen(name) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('screen-' + name).classList.add('active');
   document.getElementById('nav-' + name).classList.add('active');
-  if (name === 'today') renderToday();
+  if (name === 'today') { renderToday(); renderNotifBanner(); }
   if (name === 'history') renderHistory();
   if (name === 'stats') renderStats();
   if (name === 'meds') renderMedsList();
@@ -986,6 +1241,7 @@ function openAddModal(medId) {
   document.getElementById('f-notes').value = med?.notes || '';
   document.getElementById('f-form').value = med?.form || 'Comprimido';
   document.getElementById('del-btn').style.display = med ? 'block' : 'none';
+  document.getElementById('f-reminder').checked = med ? (med.reminder !== false) : true;
 
   selectedEmoji = med?.emoji || '💊';
   selectedColor = med?.color || '#E0F7F5';
@@ -1061,6 +1317,7 @@ function saveMed() {
     emoji: selectedEmoji,
     color: selectedColor,
     times,
+    reminder: document.getElementById('f-reminder').checked,
   };
 
   if (editingId) {
@@ -1073,6 +1330,7 @@ function saveMed() {
   closeAddModal(null, true);
   renderToday();
   renderMedsList();
+  scheduleAllReminders();
   showToast(editingId ? 'Remédio atualizado ✓' : 'Remédio adicionado ✓');
 }
 
@@ -1087,6 +1345,7 @@ function deleteMedConfirm() {
     closeAddModal(null, true);
     renderToday();
     renderMedsList();
+    scheduleAllReminders();
     showToast('Remédio excluído');
   };
   document.getElementById('confirm-modal').classList.add('open');
@@ -1302,20 +1561,41 @@ function showToast(msg) {
 // ──────────────────────────────────────────────────────────────────────
 // INIT
 // ──────────────────────────────────────────────────────────────────────
-function init() {
+async function init() {
   const d = new Date();
   document.getElementById('today-date-label').textContent = fmtDate(d);
   renderToday();
+  renderNotifBanner();
 
   // Seed demo data if empty
   if (meds.length === 0) {
     meds = [
-      { id: uid(), createdAt: Date.now(), name: 'Losartana', dose: '50mg', form: 'Comprimido', emoji: '❤️', color: '#FEE2E2', times: ['08:00', '20:00'], notes: 'Tomar com água' },
-      { id: uid(), createdAt: Date.now(), name: 'Metformina', dose: '850mg', form: 'Comprimido', emoji: '💊', color: '#D1FAE5', times: ['07:00', '12:00', '19:00'], notes: 'Tomar durante as refeições' },
+      { id: uid(), createdAt: Date.now(), name: 'Losartana', dose: '50mg', form: 'Comprimido', emoji: '❤️', color: '#FEE2E2', times: ['08:00', '20:00'], notes: 'Tomar com água', reminder: true },
+      { id: uid(), createdAt: Date.now(), name: 'Metformina', dose: '850mg', form: 'Comprimido', emoji: '💊', color: '#D1FAE5', times: ['07:00', '12:00', '19:00'], notes: 'Tomar durante as refeições', reminder: true },
     ];
     save();
     renderToday();
   }
+
+  // Se já temos permissão concedida, registra o SW e (re)agenda lembretes
+  if (notifPermissionStatus() === 'granted') {
+    await setupServiceWorker();
+    scheduleAllReminders();
+  }
+
+  // Reagenda periodicamente enquanto o app está aberto, para manter a janela
+  // de 7 dias sempre atualizada (os timers do SW se perdem se o app fechar)
+  setInterval(() => {
+    if (notifPermissionStatus() === 'granted') scheduleAllReminders();
+  }, 60 * 60 * 1000); // a cada hora
+
+  // Reagenda quando o app volta ao primeiro plano (cobre o caso de ter
+  // ficado fechado por um tempo e os timers do SW terem expirado)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && notifPermissionStatus() === 'granted') {
+      scheduleAllReminders();
+    }
+  });
 }
 
 // Close modals on back gesture (Android)
